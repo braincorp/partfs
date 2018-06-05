@@ -11,10 +11,14 @@ static off_t __fdisk_partition_get_size(
         (fdisk_partition_get_size(pa) * fdisk_get_sector_size(ctx)) : 0;
 }
 
+#include <unistd.h>
+#include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+
+#include <sys/param.h>
 
 #define PARTFS_NAME_PREFIX      "part_"
 
@@ -26,12 +30,21 @@ struct partfs_options
 
 struct partfs_device
 {
+    const char * name;
     struct fdisk_context * ctx;
     struct stat st;
 };
 
 struct partfs_file
 {
+    /* file descriptor for disk */
+    int desc;
+
+    /*
+     * initialized in open call
+     * do not modify after
+     */
+    off_t start, size;
 };
 
 static const struct fuse_opt partfs_optspec[] =
@@ -42,36 +55,13 @@ static const struct fuse_opt partfs_optspec[] =
     FUSE_OPT_END,
 };
 
-static int partfs_open_device(struct partfs_device * const pfsdev,
-                              const char * const device)
+static ssize_t __partfs_parse_path(const char * const path)
 {
-    int err;
+    size_t n;
+    int r, c;
 
-    err = -1;
-    pfsdev->ctx = fdisk_new_context();
-
-    if (pfsdev->ctx) {
-        err = fdisk_assign_device(pfsdev->ctx, device, 1);
-        if (err) {
-            fdisk_unref_context(pfsdev->ctx);
-            pfsdev->ctx = NULL;
-        }
-    }
-
-    return err;
-}
-
-static void * partfs_init(struct fuse_conn_info * const conn)
-{
-    return fuse_get_context()->private_data;
-}
-
-static void partfs_destroy(void * const priv)
-{
-    struct partfs_device * const pfsdev = priv;
-
-    fdisk_deassign_device(pfsdev->ctx, 0);
-    fdisk_unref_context(pfsdev->ctx);
+    r = sscanf(path, "/" PARTFS_NAME_PREFIX "%zu%n", &n, &c);
+    return (r == 1 && c == (int)strlen(path)) ? (ssize_t)n : -1;
 }
 
 static void __partfs_stat(struct stat * const st,
@@ -95,9 +85,42 @@ static void __partfs_stat(struct stat * const st,
     st->st_ctime    = tmpl->st_ctime;
 }
 
+static int partfs_open_device(struct partfs_device * const pdev,
+                              const char * const device)
+{
+    int err;
+
+    err = -1;
+    pdev->name = realpath(device, NULL);
+    pdev->ctx = fdisk_new_context();
+
+    if (pdev->ctx) {
+        err = fdisk_assign_device(pdev->ctx, pdev->name, 1);
+        if (err) {
+            fdisk_unref_context(pdev->ctx);
+            pdev->ctx = NULL;
+        }
+    }
+
+    return err;
+}
+
+static void * partfs_init(struct fuse_conn_info * const conn)
+{
+    return fuse_get_context()->private_data;
+}
+
+static void partfs_destroy(void * const priv)
+{
+    struct partfs_device * const pdev = priv;
+
+    fdisk_deassign_device(pdev->ctx, 0);
+    fdisk_unref_context(pdev->ctx);
+}
+
 static int partfs_getattr(const char * const path, struct stat * const st)
 {
-    struct partfs_device * const pfsdev = fuse_get_context()->private_data;
+    struct partfs_device * const pdev = fuse_get_context()->private_data;
     int ret;
 
     if (strcmp(path, "/") == 0) {
@@ -105,24 +128,22 @@ static int partfs_getattr(const char * const path, struct stat * const st)
          * will need to increase nlink when
          * extended partitions are supported
          */
-        __partfs_stat(st, S_IFDIR | 0755, 2, 0, &pfsdev->st);
+        __partfs_stat(st, S_IFDIR | 0755, 2, 0, &pdev->st);
         ret = 0;
     } else {
-        size_t n;
-        int r, c;
+        ssize_t n;
 
         ret = -ENOENT;
-
-        r = sscanf(path, "/" PARTFS_NAME_PREFIX "%zu%n", &n, &c);
-        if (r == 1 && c == (int)strlen(path)) {
+        n = __partfs_parse_path(path);
+        if (n >= 0) {
             struct fdisk_partition * pa;
 
             pa = NULL;
-            fdisk_get_partition(pfsdev->ctx, n, &pa);
+            fdisk_get_partition(pdev->ctx, n, &pa);
 
-            __partfs_stat(st, S_IFREG | 0644, 1,
-                          __fdisk_partition_get_size(pfsdev->ctx, pa),
-                          &pfsdev->st);
+            __partfs_stat(st, pdev->st.st_mode, 1,
+                          __fdisk_partition_get_size(pdev->ctx, pa),
+                          &pdev->st);
 
             fdisk_unref_partition(pa);
             ret = 0;
@@ -138,7 +159,7 @@ static int partfs_readdir(const char * const path,
                           off_t offs,
                           struct fuse_file_info * const fi)
 {
-    struct partfs_device * const pfsdev = fuse_get_context()->private_data;
+    struct partfs_device * const pdev = fuse_get_context()->private_data;
 
     int ret;
 
@@ -150,13 +171,13 @@ static int partfs_readdir(const char * const path,
 
         struct stat st;
 
-        __partfs_stat(&st, S_IFDIR | 0755, 2, 0, &pfsdev->st);
+        __partfs_stat(&st, S_IFDIR | 0755, 2, 0, &pdev->st);
         fill(buf, ".",  &st, 0);
 
         fill(buf, "..", NULL, 0);
 
         tb = NULL;
-        fdisk_get_partitions(pfsdev->ctx, &tb);
+        fdisk_get_partitions(pdev->ctx, &tb);
 
         it = fdisk_new_iter(FDISK_ITER_FORWARD);
         while (fdisk_table_next_partition(tb, it, &pa) == 0) {
@@ -166,9 +187,9 @@ static int partfs_readdir(const char * const path,
                      PARTFS_NAME_PREFIX "%zu",
                      fdisk_partition_get_partno(pa));
 
-            __partfs_stat(&st, S_IFREG | 0644, 1,
-                          __fdisk_partition_get_size(pfsdev->ctx, pa),
-                          &pfsdev->st);
+            __partfs_stat(&st, pdev->st.st_mode, 1,
+                          __fdisk_partition_get_size(pdev->ctx, pa),
+                          &pdev->st);
 
             fill(buf, num, &st, 0);
         }
@@ -182,10 +203,123 @@ static int partfs_readdir(const char * const path,
     return ret;
 }
 
+static int partfs_open(const char * const path,
+                       struct fuse_file_info * const fi)
+{
+    struct partfs_device * const pdev = fuse_get_context()->private_data;
+    struct partfs_file * const pfi = malloc(sizeof(*pfi));
+    int err;
+
+    err = -ENOMEM;
+    if (pfi) {
+        pfi->desc = open(pdev->name, fi->flags);
+        if (pfi->desc < 0) {
+            err = -errno;
+        } else {
+            const ssize_t n = __partfs_parse_path(path);
+
+            struct fdisk_partition * pa;
+
+            pa = NULL;
+            fdisk_get_partition(pdev->ctx, n, &pa);
+
+            pfi->start = fdisk_get_sector_size(pdev->ctx) *
+                fdisk_partition_get_start(pa);
+            pfi->size  = __fdisk_partition_get_size(pdev->ctx, pa);
+
+            fdisk_unref_partition(pa);
+
+            fi->fh = (uintptr_t)pfi;
+            err = 0;
+        }
+    }
+
+    return err;
+}
+
+static int partfs_lseek(const char * const path,
+                        const off_t off,
+                        struct fuse_file_info * const fi)
+{
+    struct partfs_file * const pfi = (void *)fi->fh;
+    int ret;
+
+    ret = -EINVAL;
+    if (off >= 0 && off <= pfi->size) {
+        ret = (lseek(pfi->desc, pfi->start + off, SEEK_SET) >= 0) ? 0 : -errno;
+    }
+
+    return ret;
+}
+
+static int partfs_read(const char * const path,
+                       char * const buf, size_t len,
+                       off_t off,
+                       struct fuse_file_info * const fi)
+{
+    struct partfs_file * const pfi = (void *)fi->fh;
+
+    int ret;
+
+    ret = partfs_lseek(path, off, fi);
+    if (ret == 0) {
+        ret = read(pfi->desc, buf, MIN(pfi->size - off, len));
+        if (ret < 0) {
+            ret = -errno;
+        }
+    }
+
+    return ret;
+}
+
+static int partfs_write(const char * const path,
+                        const char * const buf, const size_t len,
+                        const off_t off,
+                        struct fuse_file_info * const fi)
+{
+    struct partfs_file * const pfi = (void *)fi->fh;
+
+    int ret;
+
+
+    ret = partfs_lseek(path, off, fi);
+    if (off >= 0) {
+        if (ret != 0) {
+            ret = -EFBIG;
+        } else {
+            ret = write(pfi->desc, buf, MIN(pfi->size - off, len));
+            if (ret < 0) {
+                ret = -errno;
+            }
+        }
+    }
+
+    return ret;
+}
+
+static int partfs_release(const char * const path,
+                          struct fuse_file_info * const fi)
+{
+    struct partfs_file * const pfi = (void *)fi->fh;
+    const int desc = pfi->desc;
+
+    free(pfi);
+
+    /*
+     * fuse ignores this error, but return it anyway
+     */
+    return close(desc) ? -errno : 0;
+}
+
 static struct fuse_operations partfs_ops =
 {
     .getattr        = partfs_getattr,
     .readdir        = partfs_readdir,
+
+    .open           = partfs_open,
+    .read           = partfs_read,
+    .write          = partfs_write,
+    .release        = partfs_release,
 
     .init           = partfs_init,
     .destroy        = partfs_destroy,
@@ -195,20 +329,20 @@ int main(const int argc, char * argv[])
 {
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
     struct partfs_options opts;
-    struct partfs_device pfsdev;
+    struct partfs_device pdev;
     int err;
 
     opts.device = NULL;
     opts.help   = 0;
 
-    pfsdev.ctx     = NULL;
+    pdev.ctx     = NULL;
 
     err = fuse_opt_parse(&args, &opts, partfs_optspec, NULL);
     if (!err) {
         if (opts.device) {
-            err = stat(opts.device, &pfsdev.st);
+            err = stat(opts.device, &pdev.st);
             if (err == 0) {
-                err = partfs_open_device(&pfsdev, opts.device);
+                err = partfs_open_device(&pdev, opts.device);
             }
             if (err) {
                 fprintf(stderr,
@@ -224,7 +358,8 @@ int main(const int argc, char * argv[])
                 fuse_opt_add_arg(&args, "--help");
             }
 
-            err = fuse_main(args.argc, args.argv, &partfs_ops, &pfsdev);
+            err = fuse_main(args.argc, args.argv, &partfs_ops, &pdev);
+            free((void *)pdev.name);
 
             if (opts.help) {
                 fprintf(stderr, "\n");
