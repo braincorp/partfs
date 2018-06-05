@@ -10,7 +10,7 @@ cmake
 libfdisk1
 libfuse2
 libfdisk-dev
-libfuse-dev}
+libfuse-dev
 ```
 
 ## About
