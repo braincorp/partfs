@@ -1,6 +1,19 @@
 # partfs
 FUSE-based file system for accessing partitions on a disk
 
+## Building
+Run `make` at the top level.
+
+Your system will need to have:
+```
+cmake
+libfdisk1
+libfuse2
+libfdisk-dev
+libfuse-dev}
+```
+
+## About
 partfs allows one to access partitions within a device or file.
 the main purpose of partfs is to allow the creation of disk
 images without superuser privileges. this can be useful for the

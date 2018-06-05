@@ -542,10 +542,3 @@ int main(const int argc, char * argv[])
 
     return err;
 }
-
-/*
- * local variables:
- * compile-command: "gcc -Wall -Wextra -Wno-unused-parameter -g \
- *      -D_FILE_OFFSET_BITS=64 -o partfs partfs.c -lfdisk -lfuse"
- * end:
- */
