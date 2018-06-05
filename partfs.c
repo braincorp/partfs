@@ -485,6 +485,36 @@ static int partfs_release(const char * const path,
     return close(desc) ? -errno : 0;
 }
 
+/*
+ * truncate doesn't actually change the size of the partition, but
+ * implementing it allows using the > operator on the command line
+ * to cat data into it.
+ *
+ * function succeeds if size is less than existing size (without
+ * doing anything) and fails if size is larger.
+ */
+static int partfs_truncate(const char * const path, const off_t off)
+{
+    struct partfs_device * const pdev = fuse_get_context()->private_data;
+    const ssize_t n = __partfs_parse_path(path);
+    int ret;
+
+    ret = -ENOENT;
+    if (n >= 0) {
+        struct fdisk_partition * pa;
+
+        pa = NULL;
+        fdisk_get_partition(pdev->ctx, n, &pa);
+
+        ret = -EFBIG;
+        if (off <= __fdisk_partition_get_size(pdev->ctx, pa)) {
+            ret = 0;
+        }
+    }
+
+    return ret;
+}
+
 /* supported operations for the part(ition)fs */
 static struct fuse_operations partfs_ops =
 {
@@ -495,6 +525,8 @@ static struct fuse_operations partfs_ops =
     .read           = partfs_read,
     .write          = partfs_write,
     .release        = partfs_release,
+
+    .truncate       = partfs_truncate,
 
     .init           = partfs_init,
     .destroy        = partfs_destroy,
