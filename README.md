@@ -7,10 +7,12 @@ Run `make` at the top level.
 Your system will need to have:
 ```
 cmake
-libfdisk1
-libfuse2
-libfdisk-dev
-libfuse-dev
+libfdisk (libraries and development headers)
+libfuse (libraries and development headers)
+```
+On a Debian/Ubuntu system:
+```
+apt-get install cmake libfdisk1 libfdisk-dev libfuse2 libfuse-dev
 ```
 
 ## About
