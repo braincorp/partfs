@@ -516,7 +516,7 @@ static int partfs_truncate(const char * const path, const off_t off)
 }
 
 /* supported operations for the part(ition)fs */
-static struct fuse_operations partfs_ops =
+static const struct fuse_operations partfs_ops =
 {
     .getattr        = partfs_getattr,
     .readdir        = partfs_readdir,
