@@ -37,7 +37,7 @@ $ parted --script disk.image \
     mktable msdos mkpart primary 2048s 100% set 1 boot on
 $ mkdir mntdir
 $ partfs -o dev=disk.image mntdir
-$ mkfs.ext4 mntdir/part_0
+$ mkfs.ext4 mntdir/p1
 mke2fs 1.42.13 (17-May-2015)
 Creating filesystem with 3072 1k blocks and 768 inodes
 

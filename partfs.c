@@ -21,7 +21,7 @@
  *     mktable msdos mkpart primary 2048s 100% set 1 boot on
  * $ mkdir mntdir
  * $ partfs -o dev=disk.image mntdir
- * $ mkfs.ext4 mntdir/part_0
+ * $ mkfs.ext4 mntdir/p1
  * mke2fs 1.42.13 (17-May-2015)
  * Creating filesystem with 3072 1k blocks and 768 inodes
  *
@@ -71,10 +71,10 @@ static off_t __fdisk_partition_get_size(
 #include <sys/param.h>
 
 /*
- * file representations of partitions are named as "part_X"
- * where X is the integer id of the partition (generally 0-4)
+ * file representations of partitions are named as "pX"
+ * where X is the integer id of the partition (generally 1-4)
  */
-#define PARTFS_NAME_PREFIX      "part_"
+#define PARTFS_NAME_PREFIX      "p"
 
 /*
  * options retrieved from the command line
@@ -141,7 +141,7 @@ static ssize_t __partfs_parse_path(const char * const path)
     int r, c;
 
     r = sscanf(path, "/" PARTFS_NAME_PREFIX "%zu%n", &n, &c);
-    return (r == 1 && c == (int)strlen(path)) ? (ssize_t)n : -1;
+    return (r == 1 && c == (int)strlen(path)) ? ((ssize_t)n - 1) : -1;
 }
 
 /*
@@ -319,7 +319,7 @@ static int partfs_readdir(const char * const path,
 
             snprintf(num, sizeof(num),
                      PARTFS_NAME_PREFIX "%zu",
-                     fdisk_partition_get_partno(pa));
+                     fdisk_partition_get_partno(pa) + 1);
 
             __partfs_stat(&st, pdev->st.st_mode, 1,
                           __fdisk_partition_get_size(pdev->ctx, pa),
