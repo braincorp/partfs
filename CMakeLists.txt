@@ -8,14 +8,14 @@ add_executable(
   partfs
 
   partfs.c
-  )
+)
 
 target_compile_options(
   partfs
 
   PUBLIC
   -Wall -Wextra -Wno-unused-parameter -O2
-  )
+)
 target_compile_definitions(
   partfs
 
@@ -27,4 +27,4 @@ target_link_libraries(
 
   fdisk
   fuse
-  )
+)
